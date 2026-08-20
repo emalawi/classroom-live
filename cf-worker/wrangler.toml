@@ -12,4 +12,4 @@ new_classes = ["Room"]
 
 [[kv_namespaces]]
 binding = "PDF_STORE"
-id = "REPLACE_WITH_KV_ID"
+id ="abb11eefc74b471a8ed1757722a50c11"
