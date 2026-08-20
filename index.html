@@ -670,17 +670,33 @@
       upstreamPc.addTransceiver('audio', { direction: 'recvonly' });
 
       upstreamPc.ontrack = (event) => {
-        if (userRole === 'relay') {
-          relayStream = event.streams[0];
-        } else {
-          const audio = document.createElement('audio');
-          audio.autoplay = true;
-          audio.srcObject = event.streams[0];
-          remoteAudioContainer.appendChild(audio);
-        }
-        status.textContent = 'Connected - audio flowing';
-        status.className = 'connected';
-      };
+    const stream = event.streams[0];
+    if (userRole === 'relay') {
+      relayStream = stream;
+    }
+    
+    // Play audio for BOTH relay and regular students
+    const audio = document.getElementById('remoteAudio');
+    if (audio) {
+      audio.srcObject = stream;
+      audio.muted = false;
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(error => {
+          console.warn("Autoplay blocked.", error);
+        });
+      }
+    } else {
+      const newAudio = document.createElement('audio');
+      newAudio.autoplay = true;
+      newAudio.controls = true;
+      newAudio.srcObject = stream;
+      remoteAudioContainer.appendChild(newAudio);
+    }
+
+    status.textContent = 'Connected - audio flowing';
+    status.className = 'connected';
+  };
 
       upstreamPc.onicecandidate = (event) => {
         if (event.candidate && upstreamId) {
