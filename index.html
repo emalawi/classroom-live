@@ -70,6 +70,16 @@
       font-size: 0.85rem;
       margin-top: 14px;
     }
+    #relayNotice {
+      background: rgba(255,255,255,0.15);
+      border: 2px solid #ffe66d;
+      border-radius: 12px;
+      padding: 10px 14px;
+      margin: 10px 16px;
+      font-size: 0.85rem;
+      color: white;
+      display: none;
+    }
 
     #topBar {
       display: flex;
@@ -317,6 +327,10 @@
       </div>
     </div>
 
+    <div id="relayNotice">
+      📡 You've been set as a <strong>relay helper</strong> — your device will receive the teacher's audio and pass it on to a small group of other students. This uses a bit more of your data and battery than normal. Thank you for helping the class reach everyone!
+    </div>
+
     <audio id="remoteAudio" autoplay></audio>
     <div id="remoteAudioContainer"></div>
 
@@ -372,13 +386,17 @@
 
     let ws;
     let myId = null;
-    let userRole = null;
+    let userRole = null; // 'teacher' | 'student' | 'relay'
     let roomId = null;
 
+    // Teacher (or relay) -> outgoing peer connections to its own downstream clients
     let peerConnections = new Map();
-    let localStream = null;
-    let teacherPeerId = null;
-    let studentPc = null;
+    let localStream = null;      // teacher's actual mic stream
+    let relayStream = null;      // relay's received stream from the teacher (used to re-broadcast)
+
+    // Student/relay -> single incoming connection to whoever is upstream (teacher or a relay)
+    let upstreamId = null;       // id of teacher or relay we connect UP to
+    let upstreamPc = null;
 
     let pdfDoc = null;
     let currentPage = 1;
@@ -396,6 +414,7 @@
     const roleSelectError = document.getElementById('roleSelectError');
 
     const mainApp = document.getElementById('mainApp');
+    const relayNotice = document.getElementById('relayNotice');
     const teacherControls = document.getElementById('teacherControls');
     const teacherOnlyExtras = document.getElementById('teacherOnlyExtras');
     const studentCount = document.getElementById('studentCount');
@@ -479,6 +498,8 @@
       const id = joinRoomIdInput.value.trim();
       if (!id) { roleSelectError.textContent = 'Please enter a Meeting ID.'; return; }
 
+      // We don't know yet if this device will become a relay or a plain student -
+      // the server decides and tells us via 'joined-as-relay' or 'joined'.
       userRole = 'student';
       roleSelectError.textContent = 'Connecting...';
 
@@ -510,6 +531,11 @@
         nextBtn.style.display = 'none';
       }
 
+      if (userRole === 'relay') {
+        relayNotice.style.display = 'block';
+        teacherOnlyExtras.style.display = 'block'; // relay can see its own downstream count too
+      }
+
       if (window.innerWidth <= 800) {
         leftPanel.classList.add('collapsed');
       }
@@ -535,16 +561,32 @@
         return;
       }
 
-      if (data.type === 'joined') {
+      // Server assigned us as a relay - we connect UP to the teacher, same mechanics as a student
+      if (data.type === 'joined-as-relay') {
+        userRole = 'relay';
         roomId = data.roomId;
-        teacherPeerId = data.teacherId;
+        upstreamId = data.teacherId;
         enterMainApp();
-        await createStudentPeerConnection();
+        await connectUpstream();
         return;
       }
 
+      // Normal student join - upstream might be the teacher OR a relay, we don't care which
+      if (data.type === 'joined') {
+        roomId = data.roomId;
+        upstreamId = data.teacherId;
+        enterMainApp();
+        await connectUpstream();
+        return;
+      }
+
+      // Someone was assigned to connect to US (we're the teacher or a relay)
       if (data.type === 'student-joined') {
-        await createTeacherPeerConnectionFor(data.id);
+        if (userRole === 'teacher') {
+          await createOutgoingConnectionFor(data.id, localStream);
+        } else if (userRole === 'relay') {
+          await createOutgoingConnectionFor(data.id, relayStream);
+        }
         updateStudentCount();
         return;
       }
@@ -566,8 +608,14 @@
         return;
       }
 
+      if (data.type === 'relay-left') {
+        status.textContent = 'Your relay disconnected. Audio may pause until reconnected.';
+        return;
+      }
+
+      // We received an offer from whoever is upstream (teacher, if we're a relay/direct student)
       if (data.type === 'offer') {
-        const pc = getOrCreateStudentPc();
+        const pc = getOrCreateUpstreamPc();
         await pc.setRemoteDescription(new RTCSessionDescription(data));
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
@@ -575,6 +623,7 @@
         return;
       }
 
+      // We (teacher or relay) received an answer from one of our downstream connections
       if (data.type === 'answer') {
         const entry = peerConnections.get(data.from);
         if (entry) {
@@ -584,11 +633,16 @@
       }
 
       if (data.type === 'candidate') {
-        if (userRole === 'teacher') {
+        if (userRole === 'teacher' || userRole === 'relay') {
           const entry = peerConnections.get(data.from);
-          if (entry) await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          if (entry) {
+            await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } else if (upstreamPc) {
+            // candidate might be for our upstream connection instead
+            await upstreamPc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          }
         } else {
-          if (studentPc) await studentPc.addIceCandidate(new RTCIceCandidate(data.candidate));
+          if (upstreamPc) await upstreamPc.addIceCandidate(new RTCIceCandidate(data.candidate));
         }
         return;
       }
@@ -601,61 +655,95 @@
       if (data.type === 'poll-results') { showResults(data.votes, data.options); return; }
     }
 
-    async function createTeacherPeerConnectionFor(studentId) {
-      if (!localStream) {
-        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      }
+    // ---- Upstream connection (student -> teacher/relay, or relay -> teacher) ----
 
-      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+    function getOrCreateUpstreamPc() {
+      if (upstreamPc) return upstreamPc;
+      upstreamPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
-      pc.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: studentId }));
+      upstreamPc.addTransceiver('audio', { direction: 'recvonly' });
+
+      upstreamPc.ontrack = (event) => {
+        if (userRole === 'relay') {
+          // Keep the stream so we can re-broadcast it to our own students
+          relayStream = event.streams[0];
+        } else {
+          // Plain student - just play it
+          const audio = document.createElement('audio');
+          audio.autoplay = true;
+          audio.srcObject = event.streams[0];
+          remoteAudioContainer.appendChild(audio);
+        }
+        status.textContent = 'Connected - audio flowing';
+        status.className = 'connected';
+      };
+
+      upstreamPc.onicecandidate = (event) => {
+        if (event.candidate && upstreamId) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: upstreamId }));
         }
       };
 
-      peerConnections.set(studentId, { pc });
+      return upstreamPc;
+    }
+
+    async function connectUpstream() {
+      getOrCreateUpstreamPc();
+      // We wait for the upstream (teacher or relay) to send us an offer - triggered server-side by 'student-joined'
+    }
+
+    // ---- Downstream connections (teacher -> its students/relays, or relay -> its students) ----
+
+    async function createOutgoingConnectionFor(targetId, streamToSend) {
+      // Teacher needs its mic if not already captured
+      if (userRole === 'teacher' && !localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        streamToSend = localStream;
+      }
+
+      // Relay might not have received the teacher's stream yet - wait briefly if needed
+      if (userRole === 'relay' && !streamToSend) {
+        await waitForRelayStream();
+        streamToSend = relayStream;
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+      if (streamToSend) {
+        streamToSend.getTracks().forEach(track => pc.addTrack(track, streamToSend));
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: targetId }));
+        }
+      };
+
+      peerConnections.set(targetId, { pc });
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
-      ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp, to: studentId }));
+      ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp, to: targetId }));
 
-      status.textContent = 'Connected - broadcasting audio';
+      status.textContent = userRole === 'teacher' ? 'Connected - broadcasting audio' : 'Connected - relaying audio';
       status.className = 'connected';
+    }
+
+    function waitForRelayStream() {
+      return new Promise((resolve) => {
+        const check = () => {
+          if (relayStream) resolve();
+          else setTimeout(check, 150);
+        };
+        check();
+      });
     }
 
     function updateStudentCount() {
       studentCount.textContent = peerConnections.size;
     }
 
-    function getOrCreateStudentPc() {
-      if (studentPc) return studentPc;
-      studentPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-
-      studentPc.addTransceiver('audio', { direction: 'recvonly' });
-
-      studentPc.ontrack = (event) => {
-        const audio = document.createElement('audio');
-        audio.autoplay = true;
-        audio.srcObject = event.streams[0];
-        remoteAudioContainer.appendChild(audio);
-        status.textContent = 'Connected - audio flowing';
-        status.className = 'connected';
-      };
-
-      studentPc.onicecandidate = (event) => {
-        if (event.candidate) {
-          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: teacherPeerId }));
-        }
-      };
-
-      return studentPc;
-    }
-
-    async function createStudentPeerConnection() {
-      getOrCreateStudentPc();
-    }
+    // ---- PDF ----
 
     function handlePdfSelected(e) {
       const file = e.target.files[0];
@@ -730,6 +818,8 @@
       }
     }
 
+    // ---- Chat ----
+
     function sendChatMessage() {
       const text = chatInput.value.trim();
       if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -763,6 +853,8 @@
         if (i >= text.length) clearInterval(interval);
       }, speedMs);
     }
+
+    // ---- Poll ----
 
     function createPoll() {
       const question = pollQuestionInput.value.trim();

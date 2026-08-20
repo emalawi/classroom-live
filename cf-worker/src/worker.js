@@ -61,8 +61,9 @@ export class Room {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.clients = new Map(); // clientId -> { ws, role }
+    this.clients = new Map(); // clientId -> { ws, role, hostId, assignedStudents }
     this.teacherId = null;
+    this.relays = []; // array of { id, studentIds: [] }
   }
 
   async fetch(request) {
@@ -116,18 +117,60 @@ export class Room {
       return;
     }
 
-    // --- Student joins this room ---
+    // --- Student joins this room (auto-assigned as relay or regular student) ---
     if (data.type === "join-room") {
       if (!this.teacherId) {
         this.send(me.ws, { type: "error", message: "No meeting found with that ID." });
         return;
       }
-      me.role = "student";
-      this.send(me.ws, { type: "joined", roomId: data.roomId, teacherId: this.teacherId });
 
-      const teacher = this.clients.get(this.teacherId);
-      if (teacher) {
-        this.send(teacher.ws, { type: "student-joined", id: clientId });
+      const MAX_RELAYS = 10;
+      const MAX_STUDENTS_PER_RELAY = 10;
+
+      // Case 1: fewer than MAX_RELAYS relays exist -> this new joiner becomes a relay,
+      // connecting directly to the teacher.
+      if (this.relays.length < MAX_RELAYS) {
+        me.role = "relay";
+        me.assignedStudents = [];
+        this.relays.push({ id: clientId, studentIds: [] });
+
+        this.send(me.ws, {
+          type: "joined-as-relay",
+          roomId: data.roomId,
+          teacherId: this.teacherId
+        });
+
+        const teacher = this.clients.get(this.teacherId);
+        if (teacher) {
+          this.send(teacher.ws, { type: "student-joined", id: clientId }); // teacher treats relay like a direct connection
+        }
+        return;
+      }
+
+      // Case 2: relays exist and have room -> assign this student to the relay with fewest students
+      let targetRelay = null;
+      for (const relay of this.relays) {
+        if (relay.studentIds.length < MAX_STUDENTS_PER_RELAY) {
+          if (!targetRelay || relay.studentIds.length < targetRelay.studentIds.length) {
+            targetRelay = relay;
+          }
+        }
+      }
+
+      if (!targetRelay) {
+        this.send(me.ws, { type: "error", message: "Class is full. Please try again later." });
+        return;
+      }
+
+      me.role = "student";
+      me.hostId = targetRelay.id;
+      targetRelay.studentIds.push(clientId);
+
+      this.send(me.ws, { type: "joined", roomId: data.roomId, teacherId: targetRelay.id });
+
+      const relayClient = this.clients.get(targetRelay.id);
+      if (relayClient) {
+        this.send(relayClient.ws, { type: "student-joined", id: clientId });
       }
       return;
     }
@@ -146,17 +189,44 @@ export class Room {
     const broadcastTypes = ["chat", "pdf-ready", "pdf-page", "poll-new", "poll-results"];
     if (broadcastTypes.includes(data.type)) {
       if (me.role === "teacher") {
-        this.broadcastToStudents(data, clientId);
-      } else if (this.teacherId) {
-        const teacher = this.clients.get(this.teacherId);
-        if (teacher) this.send(teacher.ws, data);
+        // Teacher's messages go out to relays AND directly-connected students (if any)
+        this.clients.forEach((client, id) => {
+          if (id !== clientId && (client.role === "relay" || client.role === "student")) {
+            this.send(client.ws, data);
+          }
+        });
+      } else if (me.role === "relay") {
+        // Relay's messages (forwarded from teacher) go to its own students, and it doesn't loop back to teacher
+        const relay = this.relays.find(r => r.id === clientId);
+        if (relay) {
+          relay.studentIds.forEach((studentId) => {
+            const student = this.clients.get(studentId);
+            if (student) this.send(student.ws, data);
+          });
+        }
+      } else if (me.role === "student" && me.hostId) {
+        // Student messages (like chat/poll-vote) go to their assigned relay
+        const host = this.clients.get(me.hostId);
+        if (host) this.send(host.ws, data);
       }
       return;
     }
 
-    // --- Student poll votes go to the teacher for tallying ---
+    // --- Poll votes go to the student's relay, which should forward to teacher ---
     if (data.type === "poll-vote") {
-      if (this.teacherId) {
+      if (me.role === "student" && me.hostId) {
+        const host = this.clients.get(me.hostId);
+        if (host) {
+          data.from = clientId;
+          this.send(host.ws, data);
+        }
+      } else if (me.role === "relay" && this.teacherId) {
+        const teacher = this.clients.get(this.teacherId);
+        if (teacher) {
+          data.from = clientId;
+          this.send(teacher.ws, data);
+        }
+      } else if (this.teacherId) {
         const teacher = this.clients.get(this.teacherId);
         if (teacher) {
           data.from = clientId;
@@ -172,26 +242,36 @@ export class Room {
     if (!me) return;
 
     if (clientId === this.teacherId) {
-      // Teacher left - notify all students
-      this.broadcastToStudents({ type: "teacher-left" }, null);
+      // Teacher left - notify everyone
+      this.clients.forEach((client, id) => {
+        if (id !== clientId) this.send(client.ws, { type: "teacher-left" });
+      });
       this.teacherId = null;
-    } else if (me.role === "student" && this.teacherId) {
-      // Student left - notify the teacher so it can clean up that peer connection
-      const teacher = this.clients.get(this.teacherId);
-      if (teacher) {
-        this.send(teacher.ws, { type: "student-left", id: clientId });
+    } else if (me.role === "relay") {
+      // Relay left - notify its students they've lost connection (no auto-failover yet, that's a future step)
+      const relay = this.relays.find(r => r.id === clientId);
+      if (relay) {
+        relay.studentIds.forEach((studentId) => {
+          const student = this.clients.get(studentId);
+          if (student) this.send(student.ws, { type: "relay-left" });
+        });
+        this.relays = this.relays.filter(r => r.id !== clientId);
       }
+      if (this.teacherId) {
+        const teacher = this.clients.get(this.teacherId);
+        if (teacher) this.send(teacher.ws, { type: "student-left", id: clientId });
+      }
+    } else if (me.role === "student" && me.hostId) {
+      // Student left - notify their relay
+      const relay = this.relays.find(r => r.id === me.hostId);
+      if (relay) {
+        relay.studentIds = relay.studentIds.filter(id => id !== clientId);
+      }
+      const host = this.clients.get(me.hostId);
+      if (host) this.send(host.ws, { type: "student-left", id: clientId });
     }
 
     this.clients.delete(clientId);
-  }
-
-  broadcastToStudents(obj, excludeId) {
-    this.clients.forEach((client, id) => {
-      if (client.role === "student" && id !== excludeId) {
-        this.send(client.ws, obj);
-      }
-    });
   }
 
   send(ws, obj) {
