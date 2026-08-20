@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Classroom Live</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      min-height: 100vh;
+      color: #222;
+    }
+
+    /* ---- Role select screen ---- */
+    #roleSelect {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+      color: white;
+      animation: fadeIn 0.6s ease;
+      padding: 20px;
+    }
+    #roleSelect h2 { font-size: 2rem; margin-bottom: 4px; }
+    #roleSelect p { opacity: 0.9; margin-bottom: 20px; }
+    #roleSelect button {
+      padding: 14px 28px;
+      margin: 8px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    }
+    #teacherBtn { background: #ff6b6b; color: white; }
+    #studentBtn { background: #4ecdc4; color: white; }
+    #roleSelect button:active { transform: scale(0.95); }
+    #roleSelect input {
+      padding: 12px;
+      border-radius: 20px;
+      border: none;
+      width: 240px;
+      max-width: 80vw;
+      text-align: center;
+      font-size: 1rem;
+    }
+    #hostForm button, #joinForm button {
+      padding: 14px 28px;
+      margin-top: 6px;
+      font-size: 1rem;
+      border: none;
+      border-radius: 30px;
+      cursor: pointer;
+      font-weight: 600;
+      background: #ffe66d;
+      color: #333;
+    }
+    #backToChoiceBtn {
+      background: transparent;
+      color: white;
+      text-decoration: underline;
+      box-shadow: none;
+      font-size: 0.85rem;
+      margin-top: 14px;
+    }
+
+    /* ---- Top bar ---- */
+    #topBar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255,255,255,0.1);
+      backdrop-filter: blur(6px);
+      padding: 10px 16px;
+      color: white;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #topBar h2 { margin: 0; font-size: 1.2rem; }
+    #topBar .controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    #topBar button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 20px;
+      cursor: pointer;
+      font-weight: 600;
+      background: #ffe66d;
+      color: #333;
+      transition: transform 0.15s ease;
+    }
+    #topBar button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #topBar button:active:not(:disabled) { transform: scale(0.93); }
+    #toggleLeftBtn { background: #a29bfe; color: white; }
+    #status { font-size: 0.85rem; margin: 0; opacity: 0.9; }
+    #roomIdBadge {
+      background: rgba(255,255,255,0.2);
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    /* ---- Main layout ---- */
+    #mainApp { display: none; }
+    #layout {
+      display: flex;
+      height: calc(100vh - 56px);
+      overflow: hidden;
+    }
+
+    #leftPanel {
+      width: 340px;
+      min-width: 340px;
+      background: rgba(255,255,255,0.95);
+      display: flex;
+      flex-direction: column;
+      transition: margin-left 0.3s ease;
+      overflow-y: auto;
+      padding: 12px;
+    }
+    #leftPanel.collapsed { margin-left: -340px; }
+
+    #rightPanel {
+      flex: 1;
+      background: rgba(255,255,255,0.9);
+      padding: 12px;
+      overflow-y: auto;
+    }
+
+    h3 {
+      margin: 6px 0;
+      color: #764ba2;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 4px;
+    }
+
+    /* ---- Chat ---- */
+    #chatBox {
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      height: 220px;
+      overflow-y: auto;
+      padding: 8px;
+      background: #fafaff;
+    }
+    .chatLine {
+      margin-bottom: 8px;
+      padding: 6px 10px;
+      border-radius: 12px;
+      max-width: 85%;
+      animation: slideUp 0.25s ease;
+      word-wrap: break-word;
+    }
+    .chatLine.teacher { background: #ffe0e0; margin-right: auto; }
+    .chatLine.student { background: #d6f5f2; margin-left: auto; text-align: right; }
+    .chatLine strong { display: block; font-size: 0.75rem; opacity: 0.7; }
+
+    #chatInputRow { display: flex; gap: 6px; margin-top: 8px; }
+    #chatInput {
+      flex: 1;
+      padding: 10px;
+      border-radius: 20px;
+      border: 1px solid #ccc;
+    }
+    #sendChatBtn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 20px;
+      background: #ff6b6b;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #sendChatBtn:active { transform: scale(0.93); }
+
+    /* ---- Poll ---- */
+    #teacherPollControls, #pollDisplay {
+      border: 1px solid #eee;
+      border-radius: 10px;
+      padding: 10px;
+      margin-top: 10px;
+      background: #fffdf5;
+      animation: fadeIn 0.4s ease;
+    }
+    #teacherPollControls input {
+      width: 100%;
+      padding: 8px;
+      margin: 4px 0;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+    }
+    #createPollBtn {
+      padding: 10px 16px;
+      border: none;
+      border-radius: 20px;
+      background: #a29bfe;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    #pollOptionsContainer button {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      margin: 6px 0;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #4ecdc4, #556270);
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+    #pollOptionsContainer button:active { transform: scale(0.96); }
+    #pollOptionsContainer button:disabled { opacity: 0.6; }
+    #pollResults div {
+      padding: 6px 8px;
+      margin: 4px 0;
+      background: #f0f0ff;
+      border-radius: 8px;
+      animation: fadeIn 0.4s ease;
+    }
+
+    /* ---- PDF / notes panel ---- */
+    #pdfControls { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+    #pdfControls button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 20px;
+      background: #764ba2;
+      color: white;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    #pdfControls button:disabled { opacity: 0.5; }
+    #pdfCanvas {
+      border: 2px solid #764ba2;
+      border-radius: 10px;
+      max-width: 100%;
+      display: block;
+      margin: 0 auto;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+      animation: fadeIn 0.4s ease;
+    }
+
+    /* ---- Students list (teacher only) ---- */
+    #studentsList {
+      font-size: 0.85rem;
+      background: #f5f0ff;
+      border-radius: 8px;
+      padding: 6px 10px;
+      margin-top: 6px;
+    }
+
+    /* ---- Animations ---- */
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,107,0.5); } 70% { box-shadow: 0 0 0 10px rgba(255,107,107,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0); } }
+    #status.connected { animation: pulse 1.5s ease-in-out 2; color: #ffe66d; font-weight: 600; }
+
+    /* ---- Mobile ---- */
+    @media (max-width: 800px) {
+      #leftPanel {
+        position: fixed;
+        top: 56px;
+        left: 0;
+        bottom: 0;
+        width: 85%;
+        z-index: 50;
+        box-shadow: 4px 0 20px rgba(0,0,0,0.3);
+      }
+      #leftPanel.collapsed { margin-left: -100%; }
+      #rightPanel { width: 100%; }
+      #topBar h2 { font-size: 1rem; }
+      #topBar button { padding: 7px 10px; font-size: 0.85rem; }
+    }
+  </style>
+</head>
+<body>
+  <div id="roleSelect">
+    <h2>🎓 Classroom Live</h2>
+
+    <div id="roleChoiceButtons">
+      <p>Are you a teacher or a student?</p>
+      <button id="teacherBtn">I'm a Teacher</button>
+      <button id="studentBtn">I'm a Student</button>
+    </div>
+
+    <div id="hostForm" style="display:none;">
+      <p>Create a Meeting ID for your class</p>
+      <input type="text" id="hostRoomIdInput" placeholder="e.g. Malawi">
+      <br><br>
+      <button id="hostSubmitBtn">Host Meeting</button>
+      <br>
+      <button id="backToChoiceBtn1" class="backLink">&larr; Back</button>
+    </div>
+
+    <div id="joinForm" style="display:none;">
+      <p>Enter the Meeting ID your teacher gave you</p>
+      <input type="text" id="joinRoomIdInput" placeholder="e.g. Malawi">
+      <br><br>
+      <button id="joinSubmitBtn">Join Meeting</button>
+      <br>
+      <button id="backToChoiceBtn2" class="backLink">&larr; Back</button>
+    </div>
+
+    <p id="roleSelectError" style="color:#ffdd57; font-weight:600;"></p>
+  </div>
+
+  <div id="mainApp">
+    <div id="topBar">
+      <h2>🎓 Classroom Live</h2>
+      <div class="controls">
+        <span id="roomIdBadge"></span>
+        <p id="status">Not connected</p>
+        <button id="toggleLeftBtn">☰ Chat & Poll</button>
+      </div>
+    </div>
+
+    <audio id="remoteAudio" autoplay></audio>
+    <div id="remoteAudioContainer"></div>
+
+    <div id="layout">
+      <div id="leftPanel">
+        <h3>💬 Chat</h3>
+        <div id="chatBox"></div>
+        <div id="chatInputRow">
+          <input type="text" id="chatInput" placeholder="Type a message...">
+          <button id="sendChatBtn">Send</button>
+        </div>
+
+        <div id="teacherOnlyExtras" style="display:none;">
+          <div id="studentsList">Students connected: <span id="studentCount">0</span></div>
+        </div>
+
+        <h3>📊 Poll</h3>
+        <div id="teacherPollControls" style="display:none;">
+          <input type="text" id="pollQuestion" placeholder="Poll question">
+          <input type="text" id="pollOption1" placeholder="Option 1">
+          <input type="text" id="pollOption2" placeholder="Option 2">
+          <input type="text" id="pollOption3" placeholder="Option 3 (optional)">
+          <input type="text" id="pollOption4" placeholder="Option 4 (optional)">
+          <button id="createPollBtn">Send Poll</button>
+        </div>
+
+        <div id="pollDisplay" style="display:none;">
+          <p id="pollQuestionText" style="font-weight:bold;"></p>
+          <div id="pollOptionsContainer"></div>
+          <div id="pollResults"></div>
+        </div>
+      </div>
+
+      <div id="rightPanel">
+        <div id="pdfControls">
+          <div id="teacherControls" style="display:none;">
+            <input type="file" id="pdfInput" accept="application/pdf">
+          </div>
+          <button id="prevPage" disabled>&laquo; Prev</button>
+          <span id="pageInfo"></span>
+          <button id="nextPage" disabled>Next &raquo;</button>
+        </div>
+        <canvas id="pdfCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+    const SIGNALING_URL = "wss://candles-soonest-slow-civilization.trycloudflare.com";
+    const HTTP_BASE = "https://candles-soonest-slow-civilization.trycloudflare.com";
+
+    let ws;
+    let myId = null;
+    let userRole = null; // 'teacher' or 'student'
+    let roomId = null;
+
+    // Teacher: Map of studentId -> RTCPeerConnection
+    let peerConnections = new Map();
+    let localStream = null;
+
+    // Student: single connection to the teacher
+    let teacherPeerId = null;
+
+    let pdfDoc = null;
+    let currentPage = 1;
+
+    let currentPoll = null;
+    let pollVotes = [];
+    let hasVoted = false;
+
+    const roleSelect = document.getElementById('roleSelect');
+    const roleChoiceButtons = document.getElementById('roleChoiceButtons');
+    const hostForm = document.getElementById('hostForm');
+    const joinForm = document.getElementById('joinForm');
+    const hostRoomIdInput = document.getElementById('hostRoomIdInput');
+    const joinRoomIdInput = document.getElementById('joinRoomIdInput');
+    const roleSelectError = document.getElementById('roleSelectError');
+
+    const mainApp = document.getElementById('mainApp');
+    const teacherControls = document.getElementById('teacherControls');
+    const teacherOnlyExtras = document.getElementById('teacherOnlyExtras');
+    const studentCount = document.getElementById('studentCount');
+    const status = document.getElementById('status');
+    const roomIdBadge = document.getElementById('roomIdBadge');
+    const remoteAudioContainer = document.getElementById('remoteAudioContainer');
+    const pdfInput = document.getElementById('pdfInput');
+    const prevBtn = document.getElementById('prevPage');
+    const nextBtn = document.getElementById('nextPage');
+    const pageInfo = document.getElementById('pageInfo');
+    const canvas = document.getElementById('pdfCanvas');
+    const ctx = canvas.getContext('2d');
+    const chatBox = document.getElementById('chatBox');
+    const chatInput = document.getElementById('chatInput');
+    const sendChatBtn = document.getElementById('sendChatBtn');
+    const leftPanel = document.getElementById('leftPanel');
+    const toggleLeftBtn = document.getElementById('toggleLeftBtn');
+
+    const teacherPollControls = document.getElementById('teacherPollControls');
+    const pollQuestionInput = document.getElementById('pollQuestion');
+    const pollOption1 = document.getElementById('pollOption1');
+    const pollOption2 = document.getElementById('pollOption2');
+    const pollOption3 = document.getElementById('pollOption3');
+    const pollOption4 = document.getElementById('pollOption4');
+    const createPollBtn = document.getElementById('createPollBtn');
+    const pollDisplay = document.getElementById('pollDisplay');
+    const pollQuestionText = document.getElementById('pollQuestionText');
+    const pollOptionsContainer = document.getElementById('pollOptionsContainer');
+    const pollResults = document.getElementById('pollResults');
+
+    document.getElementById('teacherBtn').onclick = () => showForm('host');
+    document.getElementById('studentBtn').onclick = () => showForm('join');
+    document.getElementById('backToChoiceBtn1').onclick = () => showForm('choice');
+    document.getElementById('backToChoiceBtn2').onclick = () => showForm('choice');
+    document.getElementById('hostSubmitBtn').onclick = submitHost;
+    document.getElementById('joinSubmitBtn').onclick = submitJoin;
+
+    pdfInput.onchange = handlePdfSelected;
+    prevBtn.onclick = () => goToPage(currentPage - 1);
+    nextBtn.onclick = () => goToPage(currentPage + 1);
+    sendChatBtn.onclick = sendChatMessage;
+    chatInput.onkeydown = (e) => { if (e.key === 'Enter') sendChatMessage(); };
+    createPollBtn.onclick = createPoll;
+    toggleLeftBtn.onclick = () => leftPanel.classList.toggle('collapsed');
+
+    function showForm(which) {
+      roleChoiceButtons.style.display = which === 'choice' ? 'block' : 'none';
+      hostForm.style.display = which === 'host' ? 'block' : 'none';
+      joinForm.style.display = which === 'join' ? 'block' : 'none';
+      roleSelectError.textContent = '';
+    }
+
+    function connectSocket() {
+      return new Promise((resolve) => {
+        ws = new WebSocket(SIGNALING_URL);
+        ws.onopen = () => resolve();
+        ws.onmessage = handleSignalingMessage;
+      });
+    }
+
+    async function submitHost() {
+      const id = hostRoomIdInput.value.trim();
+      if (!id) { roleSelectError.textContent = 'Please enter a Meeting ID.'; return; }
+
+      userRole = 'teacher';
+      roleSelectError.textContent = 'Connecting...';
+
+      await connectSocket();
+      // Wait for 'welcome' to set myId, then send host request
+      const trySend = () => {
+        if (myId) {
+          ws.send(JSON.stringify({ type: 'host', roomId: id }));
+        } else {
+          setTimeout(trySend, 100);
+        }
+      };
+      trySend();
+    }
+
+    async function submitJoin() {
+      const id = joinRoomIdInput.value.trim();
+      if (!id) { roleSelectError.textContent = 'Please enter a Meeting ID.'; return; }
+
+      userRole = 'student';
+      roleSelectError.textContent = 'Connecting...';
+
+      await connectSocket();
+      const trySend = () => {
+        if (myId) {
+          ws.send(JSON.stringify({ type: 'join-room', roomId: id }));
+        } else {
+          setTimeout(trySend, 100);
+        }
+      };
+      trySend();
+    }
+
+    function enterMainApp() {
+      roleSelect.style.display = 'none';
+      mainApp.style.display = 'block';
+      roomIdBadge.textContent = 'Meeting: ' + roomId;
+      status.textContent = 'Signaling connected. Ready.';
+
+      if (userRole === 'teacher') {
+        teacherControls.style.display = 'block';
+        teacherPollControls.style.display = 'block';
+        teacherOnlyExtras.style.display = 'block';
+        checkForExistingPdf();
+      } else {
+        teacherControls.style.display = 'none';
+        prevBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+      }
+
+      if (window.innerWidth <= 800) {
+        leftPanel.classList.add('collapsed');
+      }
+    }
+
+    // ---- Signaling ----
+
+    async function handleSignalingMessage(msg) {
+      const data = JSON.parse(msg.data);
+
+      if (data.type === 'welcome') {
+        myId = data.id;
+        return;
+      }
+
+      if (data.type === 'error') {
+        roleSelectError.textContent = data.message;
+        status.textContent = 'Error: ' + data.message;
+        return;
+      }
+
+      if (data.type === 'hosted') {
+        roomId = data.roomId;
+        enterMainApp();
+        return;
+      }
+
+      if (data.type === 'joined') {
+        roomId = data.roomId;
+        teacherPeerId = data.teacherId;
+        enterMainApp();
+        await createStudentPeerConnection();
+        return;
+      }
+
+      // Teacher side: a new student joined -> create a peer connection and send them an offer
+      if (data.type === 'student-joined') {
+        await createTeacherPeerConnectionFor(data.id);
+        updateStudentCount();
+        return;
+      }
+
+      if (data.type === 'student-left') {
+        const pcEntry = peerConnections.get(data.id);
+        if (pcEntry) {
+          pcEntry.pc.close();
+          peerConnections.delete(data.id);
+        }
+        const audioEl = document.getElementById('audio-' + data.id);
+        if (audioEl) audioEl.remove();
+        updateStudentCount();
+        return;
+      }
+
+      if (data.type === 'teacher-left') {
+        status.textContent = 'Teacher has left the meeting.';
+        return;
+      }
+
+      // WebRTC signaling, routed by 'from'
+      if (data.type === 'offer') {
+        // Student receiving offer from teacher
+        const pc = getOrCreateStudentPc();
+        await pc.setRemoteDescription(new RTCSessionDescription(data));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: 'answer', sdp: answer.sdp, to: data.from }));
+        return;
+      }
+
+      if (data.type === 'answer') {
+        // Teacher receiving answer from a specific student
+        const entry = peerConnections.get(data.from);
+        if (entry) {
+          await entry.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+        }
+        return;
+      }
+
+      if (data.type === 'candidate') {
+        if (userRole === 'teacher') {
+          const entry = peerConnections.get(data.from);
+          if (entry) await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        } else {
+          if (studentPc) await studentPc.addIceCandidate(new RTCIceCandidate(data.candidate));
+        }
+        return;
+      }
+
+      // App-level broadcasts
+      if (data.type === 'pdf-ready') { fetchPdfFromServer(data.page || 1); return; }
+      if (data.type === 'pdf-page') { if (pdfDoc) renderPage(data.page, false); return; }
+      if (data.type === 'chat') { displayChatMessage(data.sender, data.text, false); return; }
+      if (data.type === 'poll-new') { receiveNewPoll(data.question, data.options); return; }
+      if (data.type === 'poll-vote') { registerVote(data.optionIndex); return; }
+      if (data.type === 'poll-results') { showResults(data.votes, data.options); return; }
+    }
+
+    // ---- Teacher: one peer connection per student ----
+
+    async function createTeacherPeerConnectionFor(studentId) {
+      if (!localStream) {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      }
+
+      const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+      localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: studentId }));
+        }
+      };
+
+      peerConnections.set(studentId, { pc });
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: offer.sdp, to: studentId }));
+
+      status.textContent = 'Connected - broadcasting audio';
+      status.className = 'connected';
+    }
+
+    function updateStudentCount() {
+      studentCount.textContent = peerConnections.size;
+    }
+
+    // ---- Student: single peer connection to the teacher ----
+
+    let studentPc = null;
+
+    function getOrCreateStudentPc() {
+      if (studentPc) return studentPc;
+      studentPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+      studentPc.addTransceiver('audio', { direction: 'recvonly' });
+
+      studentPc.ontrack = (event) => {
+        const audio = document.createElement('audio');
+        audio.autoplay = true;
+        audio.srcObject = event.streams[0];
+        remoteAudioContainer.appendChild(audio);
+        status.textContent = 'Connected - audio flowing';
+        status.className = 'connected';
+      };
+
+      studentPc.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.send(JSON.stringify({ type: 'candidate', candidate: event.candidate, to: teacherPeerId }));
+        }
+      };
+
+      return studentPc;
+    }
+
+    async function createStudentPeerConnection() {
+      getOrCreateStudentPc();
+      // Wait for the teacher to send the offer (triggered server-side by 'student-joined')
+    }
+
+    // ---- PDF ----
+
+    function handlePdfSelected(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64Data = reader.result;
+
+        await fetch(HTTP_BASE + '/upload-pdf', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId: roomId, pdfData: base64Data })
+        });
+
+        loadPdfFromBase64(base64Data).then(() => {
+          renderPage(1, false);
+        });
+
+        ws.send(JSON.stringify({ type: 'pdf-ready', page: 1 }));
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function checkForExistingPdf() {
+      const res = await fetch(HTTP_BASE + '/get-pdf?roomId=' + encodeURIComponent(roomId));
+      const data = await res.json();
+      if (data.pdfData) {
+        fetchPdfFromServer(currentPage || 1);
+      }
+    }
+
+    async function fetchPdfFromServer(pageToShow) {
+      const res = await fetch(HTTP_BASE + '/get-pdf?roomId=' + encodeURIComponent(roomId));
+      const data = await res.json();
+      if (!data.pdfData) return;
+
+      loadPdfFromBase64(data.pdfData).then(() => {
+        renderPage(pageToShow, false);
+      });
+    }
+
+    function loadPdfFromBase64(base64Data) {
+      return pdfjsLib.getDocument(base64Data).promise.then((doc) => {
+        pdfDoc = doc;
+        prevBtn.disabled = false;
+        nextBtn.disabled = false;
+      });
+    }
+
+    function renderPage(pageNum, shouldBroadcast) {
+      if (!pdfDoc || pageNum < 1 || pageNum > pdfDoc.numPages) return;
+      currentPage = pageNum;
+
+      pdfDoc.getPage(pageNum).then((page) => {
+        const viewport = page.getViewport({ scale: 1.2 });
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        page.render({ canvasContext: ctx, viewport: viewport });
+        pageInfo.textContent = `Page ${currentPage} / ${pdfDoc.numPages}`;
+
+        if (shouldBroadcast && ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pdf-page', page: currentPage }));
+        }
+      });
+    }
+
+    function goToPage(pageNum) {
+      if (userRole === 'teacher') {
+        renderPage(pageNum, true);
+      }
+    }
+
+    // ---- Chat ----
+
+    function sendChatMessage() {
+      const text = chatInput.value.trim();
+      if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+      const sender = userRole === 'teacher' ? 'Teacher' : 'Student';
+      displayChatMessage(sender, text, true);
+      ws.send(JSON.stringify({ type: 'chat', sender: sender, text: text }));
+      chatInput.value = '';
+    }
+
+    function displayChatMessage(sender, text, isOwnMessage) {
+      const line = document.createElement('div');
+      line.className = 'chatLine ' + (sender === 'Teacher' ? 'teacher' : 'student');
+
+      const label = document.createElement('strong');
+      label.textContent = sender;
+      line.appendChild(label);
+
+      const textSpan = document.createElement('span');
+      line.appendChild(textSpan);
+
+      chatBox.appendChild(line);
+      chatBox.scrollTop = chatBox.scrollHeight;
+
+      let i = 0;
+      const speedMs = 40;
+      const interval = setInterval(() => {
+        textSpan.textContent += text.charAt(i);
+        i++;
+        chatBox.scrollTop = chatBox.scrollHeight;
+        if (i >= text.length) clearInterval(interval);
+      }, speedMs);
+    }
+
+    // ---- Poll ----
+
+    function createPoll() {
+      const question = pollQuestionInput.value.trim();
+      const options = [pollOption1.value.trim(), pollOption2.value.trim(), pollOption3.value.trim(), pollOption4.value.trim()]
+        .filter(opt => opt.length > 0);
+
+      if (!question || options.length < 2) {
+        alert('Enter a question and at least 2 options.');
+        return;
+      }
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected yet.');
+        return;
+      }
+
+      currentPoll = { question, options };
+      pollVotes = new Array(options.length).fill(0);
+
+      renderPollForTeacher();
+      ws.send(JSON.stringify({ type: 'poll-new', question: question, options: options }));
+
+      pollQuestionInput.value = '';
+      pollOption1.value = '';
+      pollOption2.value = '';
+      pollOption3.value = '';
+      pollOption4.value = '';
+    }
+
+    function renderPollForTeacher() {
+      pollDisplay.style.display = 'block';
+      pollQuestionText.textContent = currentPoll.question;
+      pollOptionsContainer.innerHTML = '';
+      updateResultsDisplay();
+    }
+
+    function receiveNewPoll(question, options) {
+      currentPoll = { question, options };
+      hasVoted = false;
+
+      pollDisplay.style.display = 'block';
+      pollQuestionText.textContent = question;
+      pollOptionsContainer.innerHTML = '';
+      pollResults.innerHTML = '';
+
+      options.forEach((opt, index) => {
+        const btn = document.createElement('button');
+        btn.textContent = opt;
+        btn.onclick = () => submitVote(index);
+        pollOptionsContainer.appendChild(btn);
+      });
+    }
+
+    function submitVote(optionIndex) {
+      if (hasVoted || !ws || ws.readyState !== WebSocket.OPEN) return;
+      hasVoted = true;
+
+      Array.from(pollOptionsContainer.children).forEach(btn => btn.disabled = true);
+      pollResults.innerHTML = '<em>Vote submitted. Waiting for results...</em>';
+
+      ws.send(JSON.stringify({ type: 'poll-vote', optionIndex: optionIndex }));
+    }
+
+    function registerVote(optionIndex) {
+      if (!currentPoll || optionIndex < 0 || optionIndex >= pollVotes.length) return;
+
+      pollVotes[optionIndex]++;
+      updateResultsDisplay();
+
+      ws.send(JSON.stringify({ type: 'poll-results', votes: pollVotes, options: currentPoll.options }));
+    }
+
+    function updateResultsDisplay() {
+      const totalVotes = pollVotes.reduce((a, b) => a + b, 0);
+      pollResults.innerHTML = '';
+
+      currentPoll.options.forEach((opt, index) => {
+        const count = pollVotes[index] || 0;
+        const pct = totalVotes > 0 ? Math.round((count / totalVotes) * 100) : 0;
+
+        const row = document.createElement('div');
+        row.textContent = `${opt}: ${count} vote(s) (${pct}%)`;
+        pollResults.appendChild(row);
+      });
+    }
+
+    function showResults(votes, options) {
+      pollVotes = votes;
+      currentPoll = { question: currentPoll ? currentPoll.question : '', options: options };
+      updateResultsDisplay();
+    }
+  </script>
+</body>
+</html>
