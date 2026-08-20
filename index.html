@@ -384,18 +384,20 @@
     const WORKER_DOMAIN = "classroom-live.emalawi19.workers.dev";
     const HTTP_BASE = "https://" + WORKER_DOMAIN;
 
+    window.onerror = function(message, source, lineno, colno, error) {
+      alert('JS ERROR: ' + message + ' (line ' + lineno + ')');
+    };
+
     let ws;
     let myId = null;
     let userRole = null; // 'teacher' | 'student' | 'relay'
     let roomId = null;
 
-    // Teacher (or relay) -> outgoing peer connections to its own downstream clients
     let peerConnections = new Map();
-    let localStream = null;      // teacher's actual mic stream
-    let relayStream = null;      // relay's received stream from the teacher (used to re-broadcast)
+    let localStream = null;
+    let relayStream = null;
 
-    // Student/relay -> single incoming connection to whoever is upstream (teacher or a relay)
-    let upstreamId = null;       // id of teacher or relay we connect UP to
+    let upstreamId = null;
     let upstreamPc = null;
 
     let pdfDoc = null;
@@ -498,8 +500,6 @@
       const id = joinRoomIdInput.value.trim();
       if (!id) { roleSelectError.textContent = 'Please enter a Meeting ID.'; return; }
 
-      // We don't know yet if this device will become a relay or a plain student -
-      // the server decides and tells us via 'joined-as-relay' or 'joined'.
       userRole = 'student';
       roleSelectError.textContent = 'Connecting...';
 
@@ -533,7 +533,7 @@
 
       if (userRole === 'relay') {
         relayNotice.style.display = 'block';
-        teacherOnlyExtras.style.display = 'block'; // relay can see its own downstream count too
+        teacherOnlyExtras.style.display = 'block';
       }
 
       if (window.innerWidth <= 800) {
@@ -542,8 +542,22 @@
     }
 
     async function handleSignalingMessage(msg) {
-      const data = JSON.parse(msg.data);
+      let data;
+      try {
+        data = JSON.parse(msg.data);
+      } catch (e) {
+        alert('Failed to parse message: ' + msg.data);
+        return;
+      }
 
+      try {
+        await handleSignalingMessageInner(data);
+      } catch (e) {
+        alert('Error handling message type "' + data.type + '": ' + e.message);
+      }
+    }
+
+    async function handleSignalingMessageInner(data) {
       if (data.type === 'welcome') {
         myId = data.id;
         return;
@@ -561,7 +575,6 @@
         return;
       }
 
-      // Server assigned us as a relay - we connect UP to the teacher, same mechanics as a student
       if (data.type === 'joined-as-relay') {
         userRole = 'relay';
         roomId = data.roomId;
@@ -571,7 +584,6 @@
         return;
       }
 
-      // Normal student join - upstream might be the teacher OR a relay, we don't care which
       if (data.type === 'joined') {
         roomId = data.roomId;
         upstreamId = data.teacherId;
@@ -580,7 +592,6 @@
         return;
       }
 
-      // Someone was assigned to connect to US (we're the teacher or a relay)
       if (data.type === 'student-joined') {
         if (userRole === 'teacher') {
           await createOutgoingConnectionFor(data.id, localStream);
@@ -613,7 +624,6 @@
         return;
       }
 
-      // We received an offer from whoever is upstream (teacher, if we're a relay/direct student)
       if (data.type === 'offer') {
         const pc = getOrCreateUpstreamPc();
         await pc.setRemoteDescription(new RTCSessionDescription(data));
@@ -623,7 +633,6 @@
         return;
       }
 
-      // We (teacher or relay) received an answer from one of our downstream connections
       if (data.type === 'answer') {
         const entry = peerConnections.get(data.from);
         if (entry) {
@@ -638,7 +647,6 @@
           if (entry) {
             await entry.pc.addIceCandidate(new RTCIceCandidate(data.candidate));
           } else if (upstreamPc) {
-            // candidate might be for our upstream connection instead
             await upstreamPc.addIceCandidate(new RTCIceCandidate(data.candidate));
           }
         } else {
@@ -655,8 +663,6 @@
       if (data.type === 'poll-results') { showResults(data.votes, data.options); return; }
     }
 
-    // ---- Upstream connection (student -> teacher/relay, or relay -> teacher) ----
-
     function getOrCreateUpstreamPc() {
       if (upstreamPc) return upstreamPc;
       upstreamPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
@@ -665,10 +671,8 @@
 
       upstreamPc.ontrack = (event) => {
         if (userRole === 'relay') {
-          // Keep the stream so we can re-broadcast it to our own students
           relayStream = event.streams[0];
         } else {
-          // Plain student - just play it
           const audio = document.createElement('audio');
           audio.autoplay = true;
           audio.srcObject = event.streams[0];
@@ -689,19 +693,14 @@
 
     async function connectUpstream() {
       getOrCreateUpstreamPc();
-      // We wait for the upstream (teacher or relay) to send us an offer - triggered server-side by 'student-joined'
     }
 
-    // ---- Downstream connections (teacher -> its students/relays, or relay -> its students) ----
-
     async function createOutgoingConnectionFor(targetId, streamToSend) {
-      // Teacher needs its mic if not already captured
       if (userRole === 'teacher' && !localStream) {
         localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
         streamToSend = localStream;
       }
 
-      // Relay might not have received the teacher's stream yet - wait briefly if needed
       if (userRole === 'relay' && !streamToSend) {
         await waitForRelayStream();
         streamToSend = relayStream;
@@ -742,8 +741,6 @@
     function updateStudentCount() {
       studentCount.textContent = peerConnections.size;
     }
-
-    // ---- PDF ----
 
     function handlePdfSelected(e) {
       const file = e.target.files[0];
@@ -818,8 +815,6 @@
       }
     }
 
-    // ---- Chat ----
-
     function sendChatMessage() {
       const text = chatInput.value.trim();
       if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -853,8 +848,6 @@
         if (i >= text.length) clearInterval(interval);
       }, speedMs);
     }
-
-    // ---- Poll ----
 
     function createPoll() {
       const question = pollQuestionInput.value.trim();
