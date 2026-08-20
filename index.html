@@ -15,7 +15,6 @@
       color: #222;
     }
 
-    /* ---- Role select screen ---- */
     #roleSelect {
       display: flex;
       flex-direction: column;
@@ -63,7 +62,7 @@
       background: #ffe66d;
       color: #333;
     }
-    #backToChoiceBtn {
+    .backLink {
       background: transparent;
       color: white;
       text-decoration: underline;
@@ -72,7 +71,6 @@
       margin-top: 14px;
     }
 
-    /* ---- Top bar ---- */
     #topBar {
       display: flex;
       align-items: center;
@@ -108,7 +106,6 @@
       font-weight: 600;
     }
 
-    /* ---- Main layout ---- */
     #mainApp { display: none; }
     #layout {
       display: flex;
@@ -142,7 +139,6 @@
       padding-bottom: 4px;
     }
 
-    /* ---- Chat ---- */
     #chatBox {
       border: 1px solid #ddd;
       border-radius: 10px;
@@ -181,7 +177,6 @@
     }
     #sendChatBtn:active { transform: scale(0.93); }
 
-    /* ---- Poll ---- */
     #teacherPollControls, #pollDisplay {
       border: 1px solid #eee;
       border-radius: 10px;
@@ -230,7 +225,6 @@
       animation: fadeIn 0.4s ease;
     }
 
-    /* ---- PDF / notes panel ---- */
     #pdfControls { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
     #pdfControls button {
       padding: 8px 14px;
@@ -252,7 +246,6 @@
       animation: fadeIn 0.4s ease;
     }
 
-    /* ---- Students list (teacher only) ---- */
     #studentsList {
       font-size: 0.85rem;
       background: #f5f0ff;
@@ -261,13 +254,11 @@
       margin-top: 6px;
     }
 
-    /* ---- Animations ---- */
     @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
     @keyframes slideUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(255,107,107,0.5); } 70% { box-shadow: 0 0 0 10px rgba(255,107,107,0); } 100% { box-shadow: 0 0 0 0 rgba(255,107,107,0); } }
     #status.connected { animation: pulse 1.5s ease-in-out 2; color: #ffe66d; font-weight: 600; }
 
-    /* ---- Mobile ---- */
     @media (max-width: 800px) {
       #leftPanel {
         position: fixed;
@@ -376,20 +367,18 @@
   <script>
     pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
-    const SIGNALING_URL = "wss://candles-soonest-slow-civilization.trycloudflare.com";
-    const HTTP_BASE = "https://candles-soonest-slow-civilization.trycloudflare.com";
+    const WORKER_DOMAIN = "classroom-live.YOUR-SUBDOMAIN.workers.dev";
+    const HTTP_BASE = "https://" + WORKER_DOMAIN;
 
     let ws;
     let myId = null;
-    let userRole = null; // 'teacher' or 'student'
+    let userRole = null;
     let roomId = null;
 
-    // Teacher: Map of studentId -> RTCPeerConnection
     let peerConnections = new Map();
     let localStream = null;
-
-    // Student: single connection to the teacher
     let teacherPeerId = null;
+    let studentPc = null;
 
     let pdfDoc = null;
     let currentPage = 1;
@@ -459,9 +448,10 @@
       roleSelectError.textContent = '';
     }
 
-    function connectSocket() {
+    function connectSocket(roomIdForConnection) {
       return new Promise((resolve) => {
-        ws = new WebSocket(SIGNALING_URL);
+        const wsUrl = "wss://" + WORKER_DOMAIN + "/ws?roomId=" + encodeURIComponent(roomIdForConnection);
+        ws = new WebSocket(wsUrl);
         ws.onopen = () => resolve();
         ws.onmessage = handleSignalingMessage;
       });
@@ -474,8 +464,7 @@
       userRole = 'teacher';
       roleSelectError.textContent = 'Connecting...';
 
-      await connectSocket();
-      // Wait for 'welcome' to set myId, then send host request
+      await connectSocket(id);
       const trySend = () => {
         if (myId) {
           ws.send(JSON.stringify({ type: 'host', roomId: id }));
@@ -493,7 +482,7 @@
       userRole = 'student';
       roleSelectError.textContent = 'Connecting...';
 
-      await connectSocket();
+      await connectSocket(id);
       const trySend = () => {
         if (myId) {
           ws.send(JSON.stringify({ type: 'join-room', roomId: id }));
@@ -526,8 +515,6 @@
       }
     }
 
-    // ---- Signaling ----
-
     async function handleSignalingMessage(msg) {
       const data = JSON.parse(msg.data);
 
@@ -556,7 +543,6 @@
         return;
       }
 
-      // Teacher side: a new student joined -> create a peer connection and send them an offer
       if (data.type === 'student-joined') {
         await createTeacherPeerConnectionFor(data.id);
         updateStudentCount();
@@ -580,9 +566,7 @@
         return;
       }
 
-      // WebRTC signaling, routed by 'from'
       if (data.type === 'offer') {
-        // Student receiving offer from teacher
         const pc = getOrCreateStudentPc();
         await pc.setRemoteDescription(new RTCSessionDescription(data));
         const answer = await pc.createAnswer();
@@ -592,7 +576,6 @@
       }
 
       if (data.type === 'answer') {
-        // Teacher receiving answer from a specific student
         const entry = peerConnections.get(data.from);
         if (entry) {
           await entry.pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
@@ -610,7 +593,6 @@
         return;
       }
 
-      // App-level broadcasts
       if (data.type === 'pdf-ready') { fetchPdfFromServer(data.page || 1); return; }
       if (data.type === 'pdf-page') { if (pdfDoc) renderPage(data.page, false); return; }
       if (data.type === 'chat') { displayChatMessage(data.sender, data.text, false); return; }
@@ -618,8 +600,6 @@
       if (data.type === 'poll-vote') { registerVote(data.optionIndex); return; }
       if (data.type === 'poll-results') { showResults(data.votes, data.options); return; }
     }
-
-    // ---- Teacher: one peer connection per student ----
 
     async function createTeacherPeerConnectionFor(studentId) {
       if (!localStream) {
@@ -649,10 +629,6 @@
       studentCount.textContent = peerConnections.size;
     }
 
-    // ---- Student: single peer connection to the teacher ----
-
-    let studentPc = null;
-
     function getOrCreateStudentPc() {
       if (studentPc) return studentPc;
       studentPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
@@ -679,10 +655,7 @@
 
     async function createStudentPeerConnection() {
       getOrCreateStudentPc();
-      // Wait for the teacher to send the offer (triggered server-side by 'student-joined')
     }
-
-    // ---- PDF ----
 
     function handlePdfSelected(e) {
       const file = e.target.files[0];
@@ -757,8 +730,6 @@
       }
     }
 
-    // ---- Chat ----
-
     function sendChatMessage() {
       const text = chatInput.value.trim();
       if (!text || !ws || ws.readyState !== WebSocket.OPEN) return;
@@ -792,8 +763,6 @@
         if (i >= text.length) clearInterval(interval);
       }, speedMs);
     }
-
-    // ---- Poll ----
 
     function createPoll() {
       const question = pollQuestionInput.value.trim();
