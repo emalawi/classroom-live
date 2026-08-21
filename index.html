@@ -447,7 +447,14 @@
     const pollOptionsContainer = document.getElementById('pollOptionsContainer');
     const pollResults = document.getElementById('pollResults');
 
-    document.getElementById('teacherBtn').onclick = () => showForm('host');
+    document.getElementById('teacherBtn').onclick = () => {
+    const pwd = prompt("Enter Teacher Password:");
+    if (pwd === "2006") {
+      showForm('host');
+    } else {
+      roleSelectError.textContent = 'Incorrect password.';
+    }
+  };
     document.getElementById('studentBtn').onclick = () => showForm('join');
     document.getElementById('backToChoiceBtn1').onclick = () => showForm('choice');
     document.getElementById('backToChoiceBtn2').onclick = () => showForm('choice');
@@ -619,7 +626,24 @@
         return;
       }
 
-      if (data.type === 'relay-left') {
+      if (data.type === 'relay-changed') {
+      console.log("Relay changed, reconnecting...");
+      if (upstreamPc) { upstreamPc.close(); upstreamPc = null; }
+      upstreamId = data.newRelayId;
+      connectUpstream();
+      return;
+    }
+    if (data.type === 'promoted-to-relay') {
+      console.log("Promoted to relay!");
+      userRole = 'relay';
+      relayNotice.style.display = 'block';
+      teacherOnlyExtras.style.display = 'block';
+      if (upstreamPc) { upstreamPc.close(); upstreamPc = null; }
+      upstreamId = data.teacherId;
+      connectUpstream();
+      return;
+    }
+    if (data.type === 'relay-left') {
         status.textContent = 'Your relay disconnected. Audio may pause until reconnected.';
         return;
       }
@@ -664,7 +688,7 @@
     }
 
     function getOrCreateUpstreamPc() {
-      if (upstreamPc) return upstreamPc;
+      if (upstreamPc && upstreamPc.connectionState !== 'closed') return upstreamPc;
       upstreamPc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
       upstreamPc.addTransceiver('audio', { direction: 'recvonly' });
